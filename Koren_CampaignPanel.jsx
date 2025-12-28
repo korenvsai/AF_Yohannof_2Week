@@ -138,8 +138,15 @@
   function safeDropdownIndex(dd, fallbackIndex) {
     if (!dd) return fallbackIndex;
     try {
-      if (!dd.selection) return fallbackIndex;
-      return dd.selection.index;
+      if (dd.selection) return dd.selection.index;
+      var text = "";
+      try { text = dd.text; } catch (_) { text = ""; }
+      if (text && dd.items && dd.items.length) {
+        for (var i = 0; i < dd.items.length; i++) {
+          if (dd.items[i].text === text) return i;
+        }
+      }
+      return fallbackIndex;
     } catch (_) {
       return fallbackIndex;
     }
