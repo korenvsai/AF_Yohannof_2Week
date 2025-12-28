@@ -251,9 +251,7 @@
     setEffectValue(ctrl, E_BG_SIDE_MANUAL, row.bgSideManual);
 
     setEffectValue(ctrl, E_USE_AUTO_WHITE, row.useAutoWhite);
-    if (!row.useAutoWhite) {
-      setEffectValue(ctrl, E_WHITE_WIDTH, row.whiteWidth);
-    }
+    setEffectValue(ctrl, E_WHITE_WIDTH, row.whiteWidth);
 
     return { ok:true, err:null };
   }
