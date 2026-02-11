@@ -1410,6 +1410,11 @@ function importCompleteProjectFromCSV(){
 
   var report = {
     products: 0,
+    productRowsDetected: 0,
+    productRowsValidated: 0,
+    productRowsApplied: 0,
+    productRowsReadbackOk: 0,
+    productRowsUiSynced: 0,
     sales: 0,
     styling: false,
     talach: false,
@@ -1431,6 +1436,7 @@ function importCompleteProjectFromCSV(){
     if (sections.PRODUCTS){
       var prodLines = sections.PRODUCTS;
       if (prodLines.length > 1){
+        report.productRowsDetected = Math.max(0, prodLines.length - 1);
         var headers = prodLines[0];
         var headerMap = buildCsvHeaderMap(headers);
         
@@ -1451,6 +1457,7 @@ function importCompleteProjectFromCSV(){
           if (idx < 1 || idx > MAX_PRODUCTS) continue;
 
           var base = state.rows[idx-1];
+          if (!base) continue;
 
           function isValidNumber(v){
             if (v === null || v === undefined) return false;
@@ -1508,6 +1515,22 @@ function importCompleteProjectFromCSV(){
           base.dealCurGap = parseNumericCell(["DealCurGap"], 30, base.dealCurGap, 0, false);
 
           try { base.warnOverflow = calcOverflowWarn(base.mainText); } catch(_){}
+
+          report.productRowsValidated++;
+
+          var applyRes = applyRowToProject(idx, base);
+          if (applyRes && applyRes.ok) {
+            report.productRowsApplied++;
+            try {
+              var readBackRes = readRowFromProject(idx);
+              if (readBackRes && readBackRes.ok) {
+                state.rows[idx-1] = readBackRes.row;
+                report.productRowsReadbackOk++;
+              }
+            } catch(_){ }
+          } else {
+            report.errors.push("PRODUCTS row " + p + " apply failed: " + ((applyRes && applyRes.err) ? applyRes.err : "Unknown error"));
+          }
 
           report.products++;
         }
@@ -1682,6 +1705,7 @@ function importCompleteProjectFromCSV(){
       for (var j = 1; j <= state.productCount && j <= sharedRowsUI.length; j++){
         rowToUi(state.rows[j-1], sharedRowsUI[j-1]);
       }
+      report.productRowsUiSynced = Math.min(state.productCount, sharedRowsUI.length);
     }
     if (sharedRowsSalesUI && sharedSalesSlots) {
       var sharedSalesCount = sharedGetSalesCount ? sharedGetSalesCount() : sharedRowsSalesUI.length;
@@ -1708,6 +1732,11 @@ function importCompleteProjectFromCSV(){
   
   alert("✅ Import Complete!\n\n" +
         "Products: " + report.products + "\n" +
+        "  • rows detected: " + report.productRowsDetected + "\n" +
+        "  • rows validated: " + report.productRowsValidated + "\n" +
+        "  • rows applied: " + report.productRowsApplied + "\n" +
+        "  • readback ok: " + report.productRowsReadbackOk + "\n" +
+        "  • UI rows synced: " + report.productRowsUiSynced + "\n" +
         "Sales: " + report.sales + "\n" +
         "Styling: " + (report.styling ? "✅" : "—") + "\n" +
         "Talach: " + (report.talach ? "✅" : "—") + "\n" +
