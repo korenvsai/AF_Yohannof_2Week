@@ -942,11 +942,96 @@ function dateToISOString(d){
 
 function csvEscapeField(field) {
   var s = String(field || "");
-  s = s.replace(/[\r\n]+/g, " ");
-  if (s.indexOf(",") !== -1 || s.indexOf('"') !== -1) {
+  if (s.indexOf(",") !== -1 || s.indexOf('"') !== -1 || s.indexOf("\n") !== -1 || s.indexOf("\r") !== -1) {
     return '"' + s.replace(/"/g, '""') + '"';
   }
   return s;
+}
+
+function detectCSVDelimiter(text){
+  var commaCount = 0;
+  var semiCount = 0;
+  var tabCount = 0;
+  var inQuotes = false;
+  var lineNum = 0;
+
+  for (var i = 0; i < text.length && lineNum < 40; i++){
+    var ch = text.charAt(i);
+    if (inQuotes){
+      if (ch === '"'){
+        if (i + 1 < text.length && text.charAt(i + 1) === '"'){
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      }
+      continue;
+    }
+
+    if (ch === '"'){
+      inQuotes = true;
+    } else if (ch === ','){
+      commaCount++;
+    } else if (ch === ';'){
+      semiCount++;
+    } else if (ch === '\t'){
+      tabCount++;
+    } else if (ch === '\n'){
+      lineNum++;
+    }
+  }
+
+  if (tabCount > commaCount && tabCount > semiCount) return '\t';
+  return (semiCount > commaCount) ? ';' : ',';
+}
+
+function parseCSVContent(text){
+  var delimiter = detectCSVDelimiter(text);
+  var rows = [];
+  var row = [];
+  var field = "";
+  var inQuotes = false;
+
+  for (var i = 0; i < text.length; i++){
+    var ch = text.charAt(i);
+
+    if (inQuotes){
+      if (ch === '"'){
+        if (i + 1 < text.length && text.charAt(i + 1) === '"'){
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else {
+      if (ch === '"'){
+        inQuotes = true;
+      } else if (ch === delimiter){
+        row.push(field);
+        field = "";
+      } else if (ch === '\n'){
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else if (ch === '\r'){
+        if (i + 1 < text.length && text.charAt(i + 1) === '\n') i++;
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else {
+        field += ch;
+      }
+    }
+  }
+
+  row.push(field);
+  rows.push(row);
+  return rows;
 }
 
 function writeTextFileUTF8_BOM(file, content){
@@ -1009,6 +1094,37 @@ function parseCSVLine(line){
   }
   result.push(current);
   return result;
+}
+
+function normalizeCsvHeaderKey(key){
+  var s = trimString(String(key || ""));
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function buildCsvHeaderMap(headers){
+  var m = {};
+  for (var i = 0; i < headers.length; i++){
+    m[normalizeCsvHeaderKey(headers[i])] = i;
+  }
+  return m;
+}
+
+function getCsvCellByKeys(cells, map, keys){
+  for (var i = 0; i < keys.length; i++){
+    var idx = map[normalizeCsvHeaderKey(keys[i])];
+    if (idx !== undefined && idx < cells.length) return cells[idx];
+  }
+  return "";
+}
+
+function getCsvCellResultByKeys(cells, map, keys){
+  for (var i = 0; i < keys.length; i++){
+    var idx = map[normalizeCsvHeaderKey(keys[i])];
+    if (idx !== undefined && idx < cells.length){
+      return { found: true, value: cells[idx] };
+    }
+  }
+  return { found: false, value: "" };
 }
 
 // ------------------------------
@@ -1094,7 +1210,7 @@ function exportCompleteProjectToCSV(){
   lines.push("");
   
   lines.push("SECTION,SALES");
-  lines.push("Slot,UseAutoWhite,WhiteWidth,PrevXOffset,BGSelection,Direction");
+  lines.push("Slot,SourceProductIndex,UseAutoWhite,WhiteWidth,PrevXOffset,BGSelection,Direction");
   
   for (var s = 1; s <= saleCount; s++){
     var saleConfig = readSaleConfigFromAE(s);
@@ -1108,8 +1224,16 @@ function exportCompleteProjectToCSV(){
       };
     }
     
+    var src = 0;
+    try{
+      var srcVal = getSaleSliderValue("PRICE Sale -" + s);
+      if (srcVal !== null) src = Math.max(0, Math.min(MAX_PRODUCTS, Math.round(srcVal)));
+    }catch(_){ src = 0; }
+    if (!src && sharedSalesSlots && sharedSalesSlots[s-1]) src = sharedSalesSlots[s-1].sourceProductIndex || 0;
+
     var saleRow = [
       s,
+      src,
       saleConfig.saleUseAutoWhite ? 1 : 0,
       saleConfig.saleWhiteWidth,
       saleConfig.salePrevXOffset || 0,
@@ -1239,44 +1363,51 @@ function importCompleteProjectFromCSV(){
   }
   
   var text = r.text;
-  var allLines = text.split(/[\r\n]+/);
+  var allRows = parseCSVContent(text);
   
   var sections = {};
   var currentSection = null;
-  var currentLines = [];
+  var currentRows = [];
   
-  // Parse sections (with better cleaning)
-  for (var i = 0; i < allLines.length; i++){
-    var line = allLines[i];
-    
-    // Skip completely empty lines
-    if (!line || trimString(line) === "") continue;
-    
-    // Check if this is a SECTION header
-    if (line.indexOf("SECTION,") === 0){
-      // Save previous section
-      if (currentSection && currentLines.length > 0){
-        sections[currentSection] = currentLines;
+  for (var i = 0; i < allRows.length; i++){
+    var row = allRows[i];
+    if (!row || !row.length) continue;
+
+    var isEmpty = true;
+    for (var ec = 0; ec < row.length; ec++){
+      if (trimString(row[ec]) !== "") { isEmpty = false; break; }
+    }
+    if (isEmpty) continue;
+
+    if (trimString(row[0]) === "SECTION"){
+      if (currentSection && currentRows.length > 0){
+        sections[currentSection] = currentRows;
       }
-      
-      // Extract section name (remove SECTION, and any trailing commas)
-      var sectionPart = line.substring(8); // After "SECTION,"
-      var firstComma = sectionPart.indexOf(",");
-      currentSection = (firstComma > 0) ? sectionPart.substring(0, firstComma) : sectionPart;
-      currentSection = trimString(currentSection);
-      currentLines = [];
-      
+      currentSection = trimString(row.length > 1 ? row[1] : "");
+      currentRows = [];
     } else {
-      // Add line to current section
-      currentLines.push(line);
+      currentRows.push(row);
     }
   }
   
-  // Save last section
-  if (currentSection && currentLines.length > 0){
-    sections[currentSection] = currentLines;
+  if (currentSection && currentRows.length > 0){
+    sections[currentSection] = currentRows;
   }
-  
+
+  var importedProductCount = null;
+  if (sections.META && sections.META.length > 1){
+    for (var mi = 1; mi < sections.META.length; mi++){
+      var metaRow = sections.META[mi];
+      if (!metaRow || metaRow.length < 2) continue;
+      if (trimString(metaRow[0]) === "ProductCount") {
+        var parsedMetaCount = parseInt(trimString(metaRow[1]), 10);
+        if (!isNaN(parsedMetaCount)) {
+          importedProductCount = clampInt(parsedMetaCount, 1, MAX_PRODUCTS, state.productCount);
+        }
+      }
+    }
+  }
+
   var report = {
     products: 0,
     sales: 0,
@@ -1290,6 +1421,9 @@ function importCompleteProjectFromCSV(){
   app.beginUndoGroup("Import Complete Project");
   
   try{
+    if (importedProductCount !== null && sharedSetProductCount) {
+      sharedSetProductCount(importedProductCount);
+    }
     
     // ═══════════════════════════════════════════════════════════════
     // Import PRODUCTS
@@ -1297,64 +1431,85 @@ function importCompleteProjectFromCSV(){
     if (sections.PRODUCTS){
       var prodLines = sections.PRODUCTS;
       if (prodLines.length > 1){
-        var headers = parseCSVLine(prodLines[0]);
-        var headerMap = {};
-        for (var h = 0; h < headers.length; h++){
-          headerMap[trimString(headers[h])] = h;
-        }
+        var headers = prodLines[0];
+        var headerMap = buildCsvHeaderMap(headers);
         
         for (var p = 1; p < prodLines.length; p++){
-          var cells = parseCSVLine(prodLines[p]);
-          var idx = parseInt(cells[headerMap.Index] || "0", 10);
-          if (idx < 1 || idx > state.productCount) continue;
-          
-          var base = state.rows[idx-1];
-          
-          function getCell(key){ 
-            var i = headerMap[key]; 
-            return (i !== undefined && i < cells.length) ? trimString(cells[i]) : ""; 
+          var cells = prodLines[p];
+
+          function getCellRaw(keys, fallbackIndex){
+            var keyArr = (keys && keys.push) ? keys : [keys];
+            var result = getCsvCellResultByKeys(cells, headerMap, keyArr);
+            if (!result.found && fallbackIndex !== undefined && fallbackIndex !== null && fallbackIndex < cells.length){
+              result = { found: true, value: cells[fallbackIndex] };
+            }
+            return { found: result.found, value: String(result.value || "") };
           }
-          
-          var main = getCell("MainText");
-          var sub = getCell("SubText");
-          var add = getCell("AddText");
-          
-          if (main !== "") base.mainText = main;
-          if (sub !== "") base.subText = sub;
-          if (add !== "") base.addText = add;
-          
-          base.priceType = parseInt(getCell("PriceType"), 10) || 1;
-          base.priceValue = parseFloat(getCell("Price")) || 0;
-          base.prevPriceValue = parseFloat(getCell("PrevPrice")) || 0;
-          base.dealQty = parseInt(getCell("DealQty"), 10) || 0;
-          base.dealPrice = parseFloat(getCell("DealPrice")) || 0;
-          base.showUnit = parseInt(getCell("ShowUnit"), 10) || 0;
-          base.showDealUnit = parseInt(getCell("ShowDealUnit"), 10) || 0;
-          base.useDefaultBG = parseInt(getCell("UseDefaultBG"), 10) || 1;
-          base.productIndex = parseInt(getCell("ProductIndex"), 10) || idx;
-          base.bgSideManual = parseInt(getCell("BGSideManual"), 10) || 1;
-          base.bgColorManual = parseInt(getCell("BGColorManual"), 10) || 1;
-          base.useAutoWhite = parseInt(getCell("UseAutoWhite"), 10) || 1;
-          base.whiteWidth = parseInt(getCell("WhiteWidth"), 10) || 2;
-          base.showPrevPrice = parseInt(getCell("ShowPrevPrice"), 10) || 0;
-          base.prevXOffset = parseFloat(getCell("PrevXOffset")) || 0;
-          base.themeOverride = parseInt(getCell("ThemeOverride"), 10) || 1;
-          base.priceBgSelection = parseInt(getCell("PriceBGSelection"), 10) || 1;
-          base.priceDirectionOverride = parseInt(getCell("PriceDirectionOverride"), 10) || 1;
-          base.regDecimalOffset = parseFloat(getCell("RegDecimalOffset")) || 0;
-          base.regCurrencyOffset = parseFloat(getCell("RegCurrencyOffset")) || 0;
-          base.regUnitOffset = parseFloat(getCell("RegUnitOffset")) || 0;
-          base.prevDecimalOffset = parseFloat(getCell("PrevDecimalOffset")) || 0;
-          base.prevCurrencyOffset = parseFloat(getCell("PrevCurrencyOffset")) || 0;
-          base.prevUnitOffset = parseFloat(getCell("PrevUnitOffset")) || 0;
-          base.dealQtyGap = parseFloat(getCell("DealQtyGap")) || 0;
-          base.dealSepGap = parseFloat(getCell("DealSepGap")) || 0;
-          base.dealCurGap = parseFloat(getCell("DealCurGap")) || 0;
-          
+
+          var idxCell = getCellRaw(["Index", "Idx", "#"], 0);
+          var idx = parseInt(trimString(idxCell.value), 10) || 0;
+          if (idx < 1 || idx > MAX_PRODUCTS) continue;
+
+          var base = state.rows[idx-1];
+
+          function isValidNumber(v){
+            if (v === null || v === undefined) return false;
+            if (trimString(v) === "") return false;
+            return !isNaN(Number(v));
+          }
+          function parseNumericCell(keys, fallbackIndex, currentValue, fallbackValue, isInt){
+            var keyArr = (keys && keys.push) ? keys : [keys];
+            var rawObj = getCellRaw(keyArr, fallbackIndex);
+            if (!rawObj.found) return currentValue;
+            var raw = rawObj.value;
+            var t = trimString(raw);
+            if (t === "") return fallbackValue;
+            if (!isValidNumber(raw)){
+              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + keyArr[0] + ": '" + raw + "'");
+              return currentValue;
+            }
+            return isInt ? parseInt(t, 10) : parseFloat(t);
+          }
+
+          var main = getCellRaw(["MainText", "Main", "Name"], 1);
+          var sub = getCellRaw(["SubText", "Sub"], 2);
+          var add = getCellRaw(["AddText", "SmallText", "Add"], 3);
+
+          if (main.found) base.mainText = main.value;
+          if (sub.found) base.subText = sub.value;
+          if (add.found) base.addText = add.value;
+
+          base.priceType = parseNumericCell(["PriceType", "Type"], 4, base.priceType, 1, true);
+          base.priceValue = parseNumericCell(["Price", "PriceValue"], 5, base.priceValue, 0, false);
+          base.prevPriceValue = parseNumericCell(["PrevPrice", "PreviousPrice"], 6, base.prevPriceValue, 0, false);
+          base.dealQty = parseNumericCell(["DealQty", "Quantity"], 7, base.dealQty, 0, true);
+          base.dealPrice = parseNumericCell(["DealPrice"], 8, base.dealPrice, 0, false);
+          base.showUnit = parseNumericCell(["ShowUnit"], 9, base.showUnit, 0, true);
+          base.showDealUnit = parseNumericCell(["ShowDealUnit", "ShowDeal"], 10, base.showDealUnit, 0, true);
+          base.useDefaultBG = parseNumericCell(["UseDefaultBG", "UseDefaultBg", "UseDefaul"], 11, base.useDefaultBG, 1, true);
+          base.productIndex = parseNumericCell(["ProductIndex", "ProductInd"], 12, base.productIndex, idx, true);
+          base.bgSideManual = parseNumericCell(["BGSideManual", "BgSideManual", "BGSideMa"], 13, base.bgSideManual, 1, true);
+          base.bgColorManual = parseNumericCell(["BGColorManual", "BgColorManual", "BGColorM"], 14, base.bgColorManual, 1, true);
+          base.useAutoWhite = parseNumericCell(["UseAutoWhite", "UseAutoW"], 15, base.useAutoWhite, 1, true);
+          base.whiteWidth = parseNumericCell(["WhiteWidth", "WhiteWidt"], 16, base.whiteWidth, 2, true);
+          base.showPrevPrice = parseNumericCell(["ShowPrevPrice", "ShowPrev"], 17, base.showPrevPrice, 0, true);
+          base.prevXOffset = parseNumericCell(["PrevXOffset", "PrevX", "PrevXOffset\n", "PrevXOffs"], 18, base.prevXOffset, 0, false);
+          base.themeOverride = parseNumericCell(["ThemeOverride", "ThemeOv"], 19, base.themeOverride, 1, true);
+          base.priceBgSelection = parseNumericCell(["PriceBGSelection", "PriceBgSelection", "PriceBGSel"], 20, base.priceBgSelection, 1, true);
+          base.priceDirectionOverride = parseNumericCell(["PriceDirectionOverride", "PriceDirection", "PriceDir"], 21, base.priceDirectionOverride, 1, true);
+          base.regDecimalOffset = parseNumericCell(["RegDecimalOffset"], 22, base.regDecimalOffset, 0, false);
+          base.regCurrencyOffset = parseNumericCell(["RegCurrencyOffset"], 23, base.regCurrencyOffset, 0, false);
+          base.regUnitOffset = parseNumericCell(["RegUnitOffset"], 24, base.regUnitOffset, 0, false);
+          base.prevDecimalOffset = parseNumericCell(["PrevDecimalOffset"], 25, base.prevDecimalOffset, 0, false);
+          base.prevCurrencyOffset = parseNumericCell(["PrevCurrencyOffset"], 26, base.prevCurrencyOffset, 0, false);
+          base.prevUnitOffset = parseNumericCell(["PrevUnitOffset"], 27, base.prevUnitOffset, 0, false);
+          base.dealQtyGap = parseNumericCell(["DealQtyGap"], 28, base.dealQtyGap, 0, false);
+          base.dealSepGap = parseNumericCell(["DealSepGap"], 29, base.dealSepGap, 0, false);
+          base.dealCurGap = parseNumericCell(["DealCurGap"], 30, base.dealCurGap, 0, false);
+
           try { base.warnOverflow = calcOverflowWarn(base.mainText); } catch(_){}
-          
-          var ar = applyRowToProject(idx, base);
-          if (ar && ar.ok) report.products++;
+
+          report.products++;
         }
       }
     }
@@ -1365,31 +1520,58 @@ function importCompleteProjectFromCSV(){
     if (sections.SALES){
       var saleLines = sections.SALES;
       if (saleLines.length > 1){
-        var saleHeaders = parseCSVLine(saleLines[0]);
-        var saleMap = {};
-        for (var sh = 0; sh < saleHeaders.length; sh++){
-          saleMap[trimString(saleHeaders[sh])] = sh;
-        }
+        var saleHeaders = saleLines[0];
+        var saleMap = buildCsvHeaderMap(saleHeaders);
         
         for (var sl = 1; sl < saleLines.length; sl++){
-          var saleCells = parseCSVLine(saleLines[sl]);
-          var slot = parseInt(saleCells[saleMap.Slot] || "0", 10);
+          var saleCells = saleLines[sl];
+          var slot = parseInt(getCsvCellByKeys(saleCells, saleMap, ["Slot"]), 10) || 0;
           if (slot < 1 || slot > 21) continue;
           
-          function getSaleCell(key){ 
-            var i = saleMap[key]; 
-            return (i !== undefined && i < saleCells.length) ? trimString(saleCells[i]) : ""; 
+          function getSaleCell(keys){
+            var raw = getCsvCellByKeys(saleCells, saleMap, keys);
+            return trimString(raw);
           }
           
           var saleConfig = {
-            saleUseAutoWhite: parseInt(getSaleCell("UseAutoWhite"), 10) === 1,
-            saleWhiteWidth: parseInt(getSaleCell("WhiteWidth"), 10) || 2,
-            salePrevXOffset: parseFloat(getSaleCell("PrevXOffset")) || 0,
-            saleBgSelection: parseInt(getSaleCell("BGSelection"), 10) || 1,
-            saleDirection: parseInt(getSaleCell("Direction"), 10) || 1
+            saleUseAutoWhite: parseInt(getSaleCell(["UseAutoWhite"]), 10) === 1,
+            saleWhiteWidth: parseInt(getSaleCell(["WhiteWidth"]), 10) || 2,
+            salePrevXOffset: parseFloat(getSaleCell(["PrevXOffset", "PrevXOffset\\n", "PrevX"] )) || 0,
+            saleBgSelection: parseInt(getSaleCell(["BGSelection", "BG Color", "BGColor"]), 10) || 1,
+            saleDirection: parseInt(getSaleCell(["Direction", "Side"]), 10) || 1
           };
-          
-          if (applySaleConfigToAE(slot, saleConfig)) report.sales++;
+
+          var srcValue = getSaleCell(["SourceProductIndex", "SourceProduct", "Source"]);
+          if (srcValue === "" && sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            srcValue = String(sharedSalesSlots[slot - 1].sourceProductIndex || 0);
+          }
+          var srcIdx = parseInt(srcValue, 10);
+          if (isNaN(srcIdx)) {
+            report.errors.push("SALES row " + sl + " invalid numeric value for SourceProductIndex: '" + srcValue + "'");
+            if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+              srcIdx = sharedSalesSlots[slot - 1].sourceProductIndex || 0;
+            } else {
+              srcIdx = 0;
+            }
+          }
+          srcIdx = Math.max(0, Math.min(MAX_PRODUCTS, srcIdx));
+          if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            sharedSalesSlots[slot - 1].sourceProductIndex = srcIdx;
+          }
+
+          if (sharedRowsSalesUI && slot <= sharedRowsSalesUI.length) {
+            sharedRowsSalesUI[slot - 1].source.selection = sharedRowsSalesUI[slot - 1].source.items[srcIdx];
+            sharedRowsSalesUI[slot - 1].updateFromSource();
+          }
+
+          if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            sharedSalesSlots[slot - 1].saleUseAutoWhite = saleConfig.saleUseAutoWhite;
+            sharedSalesSlots[slot - 1].saleWhiteWidth = saleConfig.saleWhiteWidth;
+            sharedSalesSlots[slot - 1].salePrevXOffset = saleConfig.salePrevXOffset;
+            sharedSalesSlots[slot - 1].saleBgSelection = saleConfig.saleBgSelection;
+            sharedSalesSlots[slot - 1].saleDirection = saleConfig.saleDirection;
+          }
+          report.sales++;
         }
       }
     }
@@ -1402,7 +1584,7 @@ function importCompleteProjectFromCSV(){
       var styleData = {};
       
       for (var stl = 1; stl < styleLines.length; stl++){
-        var styleCells = parseCSVLine(styleLines[stl]);
+        var styleCells = styleLines[stl];
         if (styleCells.length >= 2){
           var prop = trimString(styleCells[0]);
           var val = parseInt(styleCells[1], 10) || 1;
@@ -1440,7 +1622,7 @@ function importCompleteProjectFromCSV(){
       var talachData = {};
       
       for (var tl = 1; tl < talachLines.length; tl++){
-        var talachCells = parseCSVLine(talachLines[tl]);
+        var talachCells = talachLines[tl];
         if (talachCells.length >= 2){
           var tProp = trimString(talachCells[0]);
           var tVal = talachCells[1];
@@ -1471,7 +1653,7 @@ function importCompleteProjectFromCSV(){
       var colorLines = sections.COLORS;
       
       for (var cl = 1; cl < colorLines.length; cl++){
-        var colorCells = parseCSVLine(colorLines[cl]);
+        var colorCells = colorLines[cl];
         if (colorCells.length >= 2){
           var colorName = trimString(colorCells[0]);
           var hex = trimString(colorCells[1]);
@@ -1485,40 +1667,8 @@ function importCompleteProjectFromCSV(){
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // Import RENDER
+    // Import RENDER (disabled by request)
     // ═══════════════════════════════════════════════════════════════
-    if (sections.RENDER){
-      var renderLines = sections.RENDER;
-      var renderData = {};
-      
-      for (var rl = 1; rl < renderLines.length; rl++){
-        var renderCells = parseCSVLine(renderLines[rl]);
-        if (renderCells.length >= 2){
-          var rProp = trimString(renderCells[0]);
-          var rVal = trimString(renderCells[1]);
-          
-          if (rProp === "ProductCount") renderData.productCount = parseInt(rVal, 10) || 0;
-          else if (rProp === "SaleCount") renderData.saleCount = parseInt(rVal, 10) || 0;
-          else if (rProp === "RenderSale") renderData.renderSale = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderEntrance") renderData.renderEntrance = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderPardes") renderData.renderPardes = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderOutside") renderData.renderOutside = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderDrinks") renderData.renderDrinks = (parseInt(rVal, 10) === 1);
-          else if (rProp === "OutputFolder") renderData.outputFolder = rVal;
-          else if (rProp === "FileNameBase") renderData.fileNameBase = rVal;
-          else if (rProp === "OutputModule") renderData.outputModule = rVal;
-        }
-      }
-      
-      // Save to state
-      if (!state.renderConfig) state.renderConfig = {};
-      for (var key in renderData) {
-        if (renderData.hasOwnProperty(key)) {
-          state.renderConfig[key] = renderData[key];
-        }
-      }
-      report.renderImported = true;
-    }
     
   }catch(e){
     report.errors.push(e.toString());
@@ -1528,9 +1678,32 @@ function importCompleteProjectFromCSV(){
   
   // Refresh UI
   try{
-    for (var j = 1; j <= state.productCount; j++){
-      rowToUi(state.rows[j-1], rowsUI[j-1]);
+    if (sharedRowsUI) {
+      for (var j = 1; j <= state.productCount && j <= sharedRowsUI.length; j++){
+        rowToUi(state.rows[j-1], sharedRowsUI[j-1]);
+      }
     }
+    if (sharedRowsSalesUI && sharedSalesSlots) {
+      var sharedSalesCount = sharedGetSalesCount ? sharedGetSalesCount() : sharedRowsSalesUI.length;
+      for (var sru = 1; sru <= Math.min(sharedSalesCount, sharedRowsSalesUI.length); sru++){
+        var ui = sharedRowsSalesUI[sru - 1];
+        var slotCfg = sharedSalesSlots[sru - 1];
+        if (!ui || !slotCfg) continue;
+        if (slotCfg.sourceProductIndex >= 0 && slotCfg.sourceProductIndex < ui.source.items.length) {
+          ui.source.selection = ui.source.items[slotCfg.sourceProductIndex];
+        }
+        ui.autoW.value = !!slotCfg.saleUseAutoWhite;
+        ui.white.selection = Math.max(0, Math.min(2, (slotCfg.saleWhiteWidth || 1) - 1));
+        ui.bgColor.selection = Math.max(0, Math.min(16, (slotCfg.saleBgSelection || 1) - 1));
+        ui.side.selection = Math.max(0, Math.min(2, (slotCfg.saleDirection || 1) - 1));
+        ui.prevX.value = slotCfg.salePrevXOffset || 0;
+        ui.refreshEnabled();
+      }
+    }
+    if (sharedStyleLoad && sharedStyleLoad.onClick) sharedStyleLoad.onClick();
+    if (sharedTalachLoad && sharedTalachLoad.onClick) sharedTalachLoad.onClick();
+    if (sharedColorsLoad && sharedColorsLoad.onClick) sharedColorsLoad.onClick();
+    if (report.renderImported && sharedRenderApplyUI) sharedRenderApplyUI();
   }catch(_){}
   
   alert("✅ Import Complete!\n\n" +
@@ -1539,7 +1712,7 @@ function importCompleteProjectFromCSV(){
         "Styling: " + (report.styling ? "✅" : "—") + "\n" +
         "Talach: " + (report.talach ? "✅" : "—") + "\n" +
         "Colors: " + report.colors + "\n" +
-        "Render: " + (report.renderImported ? "✅" : "—") + "\n\n" +
+        "Render: — (disabled)" + "\n\n" +
         (report.errors.length ? ("⚠️ Errors:\n" + report.errors.join("\n")) : "No errors"));
 }
 
@@ -1610,6 +1783,18 @@ var state = {
     return a;
   })()
 };
+
+// Shared references for complete import/export helpers (Tab 2 data)
+var sharedSalesSlots = null;
+var sharedRowsSalesUI = null;
+var sharedGetSalesCount = function(){ return 21; };
+var sharedRowsUI = null;
+var sharedStyleLoad = null;
+var sharedTalachLoad = null;
+var sharedColorsLoad = null;
+var sharedRenderDetect = null;
+var sharedRenderApplyUI = null;
+var sharedSetProductCount = null;
 
 function readRowFromProject(i) {
   var row = new ProductRow(i);
@@ -2289,6 +2474,7 @@ btnStyleLoad.onClick = function() {
   updateSalesVisibility();
   alert("✅ Loaded from AE!");
 };
+sharedStyleLoad = btnStyleLoad;
 
 // Apply button
 btnStyleApply.onClick = function() {
@@ -2452,6 +2638,7 @@ sb.value = 0;
 
 
 var rowsUI = [];
+sharedRowsUI = rowsUI;
 
 
 var currentRangeFrom = 1;
@@ -3178,6 +3365,7 @@ function rebuildRows() {
     rowsHolder.remove(rowsUI[j].group);
   }
   rowsUI = [];
+  sharedRowsUI = rowsUI;
   for (var k = 1; k <= MAX_PRODUCTS; k++) {
     rowsUI.push(makeRow(k));
   }
@@ -3356,6 +3544,14 @@ function onCountChanged() {
 }
 etCount.onChange = onCountChanged;
 etCount.onDeactivate = onCountChanged;
+sharedSetProductCount = function(nextCount){
+  state.productCount = clampInt(nextCount, 1, MAX_PRODUCTS, state.productCount);
+  etCount.text = "" + state.productCount;
+  applyProductCountToUI();
+  for (var i = 1; i <= state.productCount; i++) {
+    rowToUi(state.rows[i-1], rowsUI[i-1]);
+  }
+};
 
 
 btnSelAll.onClick = function() {
@@ -3508,6 +3704,7 @@ btnMegaLoad.onClick = function() {
   var confirmMsg = "🚀 MEGA LOAD - Load ALL data from project?\n\n";
   confirmMsg += "This will load:\n";
   confirmMsg += "✅ 20 Products (TAB 1)\n";
+  confirmMsg += "✅ Sale Slots (TAB 2)\n";
   confirmMsg += "✅ Project Styling (TAB 0)\n";
   confirmMsg += "✅ Talach + Dates (TAB 3)\n";
   confirmMsg += "✅ Color Palette (TAB 5)\n";
@@ -3543,6 +3740,18 @@ btnMegaLoad.onClick = function() {
       report += "✅ Styling loaded (TAB 0)\n";
     } catch (e) {
       report += "⚠️ Styling failed (TAB 0 may not exist)\n";
+    }
+
+    // TAB 2: Sales
+    try {
+      if (typeof btnLoadSales !== 'undefined' && btnLoadSales && btnLoadSales.onClick) {
+        btnLoadSales.onClick();
+        report += "✅ Sale slots loaded (TAB 2)\n";
+      } else {
+        report += "⚠️ Sales button not found (TAB 2)\n";
+      }
+    } catch (e) {
+      report += "❌ Sales failed: " + e.toString() + "\n";
     }
     
     // TAB 3: Talach + Dates
@@ -3609,6 +3818,9 @@ for (var s = 1; s <= 21; s++) {
     saleDirection: 1
   });
 }
+
+// expose Tab 2 data for complete import/export helpers
+sharedSalesSlots = salesSlots;
 
 
 // ✅ TOP CONTROLS - עם כפתורים מחודשים + TOOLTIPS
@@ -3736,6 +3948,9 @@ sbSales.value = 0;
 
 var rowsSalesUI = [];
 var salesCount = 21;
+
+sharedRowsSalesUI = rowsSalesUI;
+sharedGetSalesCount = function(){ return salesCount; };
 var MAX_SALES = 21;
 
 
@@ -4052,6 +4267,7 @@ function rebuildSalesRows() {
   }
   
   rowsSalesUI = [];
+  sharedRowsSalesUI = rowsSalesUI;
   
   for (var m = 1; m <= MAX_SALES; m++) {
     rowsSalesUI.push(makeSalesRow(m));
@@ -4731,6 +4947,7 @@ btnLoadTalach.onClick = function() {
     alert("❌ " + e.toString());
   }
 };
+sharedTalachLoad = btnLoadTalach;
 
 btnForceRefreshSales.onClick = function() {
   app.beginUndoGroup("Force Refresh Sales");
@@ -5113,6 +5330,7 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
 
     btnColorsLoad.onClick = loadColorsFromAE;
     btnColorsRefresh.onClick = loadColorsFromAE;
+    sharedColorsLoad = btnColorsLoad;
 
 
     // END TAB 5 CODE BLOCK
@@ -5217,6 +5435,7 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
         alert(result.message);
       }
     };
+    sharedRenderDetect = btnDetect;
 
     tabRender.add("panel", undefined, "").preferredSize.height = 2;
 
@@ -5347,6 +5566,35 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
       presetDropdown.add("item", "Best Settings");
       presetDropdown.selection = 0;
     }
+
+    sharedRenderApplyUI = function() {
+      if (!state || !state.renderConfig) return;
+      var rc = state.renderConfig;
+
+      function selectDropByText(dd, txt){
+        if (!dd || !dd.items) return;
+        var target = String(txt);
+        for (var i = 0; i < dd.items.length; i++) {
+          if (String(dd.items[i].text) === target) {
+            dd.selection = i;
+            return;
+          }
+        }
+      }
+
+      if (rc.productCount) selectDropByText(productCountDropdown, rc.productCount);
+      if (rc.saleCount !== undefined && rc.saleCount !== null) selectDropByText(saleCountDropdown, rc.saleCount);
+
+      if (rc.renderSale !== undefined) cbSale.value = !!rc.renderSale;
+      if (rc.renderEntrance !== undefined) cbEntrance.value = !!rc.renderEntrance;
+      if (rc.renderPardes !== undefined) cbPardes.value = !!rc.renderPardes;
+      if (rc.renderOutside !== undefined) cbOutside.value = !!rc.renderOutside;
+      if (rc.renderDrinks !== undefined) cbDrinks.value = !!rc.renderDrinks;
+
+      if (rc.outputFolder !== undefined) folderPathEdit.text = rc.outputFolder;
+      if (rc.fileNameBase !== undefined) fileNameEdit.text = rc.fileNameBase;
+      if (rc.outputModule !== undefined) selectDropByText(presetDropdown, rc.outputModule);
+    };
 
     tabRender.add("panel", undefined, "").preferredSize.height = 2;
 
