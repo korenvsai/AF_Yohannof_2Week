@@ -1079,6 +1079,16 @@ function getCsvCellByKeys(cells, map, keys){
   return "";
 }
 
+function getCsvCellResultByKeys(cells, map, keys){
+  for (var i = 0; i < keys.length; i++){
+    var idx = map[normalizeCsvHeaderKey(keys[i])];
+    if (idx !== undefined && idx < cells.length){
+      return { found: true, value: cells[idx] };
+    }
+  }
+  return { found: false, value: "" };
+}
+
 // ------------------------------
 // Export Complete Project to CSV
 // ------------------------------
@@ -1345,7 +1355,21 @@ function importCompleteProjectFromCSV(){
   if (currentSection && currentRows.length > 0){
     sections[currentSection] = currentRows;
   }
-  
+
+  var importedProductCount = null;
+  if (sections.META && sections.META.length > 1){
+    for (var mi = 1; mi < sections.META.length; mi++){
+      var metaRow = sections.META[mi];
+      if (!metaRow || metaRow.length < 2) continue;
+      if (trimString(metaRow[0]) === "ProductCount") {
+        var parsedMetaCount = parseInt(trimString(metaRow[1]), 10);
+        if (!isNaN(parsedMetaCount)) {
+          importedProductCount = clampInt(parsedMetaCount, 1, MAX_PRODUCTS, state.productCount);
+        }
+      }
+    }
+  }
+
   var report = {
     products: 0,
     sales: 0,
@@ -1359,6 +1383,9 @@ function importCompleteProjectFromCSV(){
   app.beginUndoGroup("Import Complete Project");
   
   try{
+    if (importedProductCount !== null && sharedSetProductCount) {
+      sharedSetProductCount(importedProductCount);
+    }
     
     // ═══════════════════════════════════════════════════════════════
     // Import PRODUCTS
@@ -1372,83 +1399,69 @@ function importCompleteProjectFromCSV(){
         for (var p = 1; p < prodLines.length; p++){
           var cells = prodLines[p];
           var idx = parseInt(getCsvCellByKeys(cells, headerMap, ["Index"]), 10) || 0;
-          if (idx < 1 || idx > state.productCount) continue;
+          if (idx < 1 || idx > MAX_PRODUCTS) continue;
           
           var base = state.rows[idx-1];
           
-          function getCellRaw(key){
-            return String(getCsvCellByKeys(cells, headerMap, [key]) || "");
+          function getCellRaw(keys){
+            var keyArr = (keys && keys.push) ? keys : [keys];
+            var result = getCsvCellResultByKeys(cells, headerMap, keyArr);
+            return { found: result.found, value: String(result.value || "") };
           }
           function isValidNumber(v){
             if (v === null || v === undefined) return false;
             if (trimString(v) === "") return false;
             return !isNaN(Number(v));
           }
-          function parseNumericCell(key, currentValue, fallbackValue, isInt){
-            var raw = getCellRaw(key);
+          function parseNumericCell(keys, currentValue, fallbackValue, isInt){
+            var keyArr = (keys && keys.push) ? keys : [keys];
+            var rawObj = getCellRaw(keyArr);
+            if (!rawObj.found) return currentValue;
+            var raw = rawObj.value;
             var t = trimString(raw);
             if (t === "") return fallbackValue;
             if (!isValidNumber(raw)){
-              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + key + ": '" + raw + "'");
+              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + keyArr[0] + ": '" + raw + "'");
               return currentValue;
             }
             return isInt ? parseInt(t, 10) : parseFloat(t);
           }
-          function getCellRaw(key){
-            var i = headerMap[key];
-            return (i !== undefined && i < cells.length) ? String(cells[i] || "") : "";
-          }
-          function isValidNumber(v){
-            if (v === null || v === undefined) return false;
-            if (trimString(v) === "") return false;
-            return !isNaN(Number(v));
-          }
-          function parseNumericCell(key, currentValue, fallbackValue, isInt){
-            var raw = getCellRaw(key);
-            var t = trimString(raw);
-            if (t === "") return fallbackValue;
-            if (!isValidNumber(raw)){
-              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + key + ": '" + raw + "'");
-              return currentValue;
-            }
-            return isInt ? parseInt(t, 10) : parseFloat(t);
-          }
+
+          var main = getCellRaw(["MainText", "Main", "Name"]);
+          var sub = getCellRaw(["SubText", "Sub"]);
+          var add = getCellRaw(["AddText", "SmallText", "Add"]);
           
-          var main = getCellRaw("MainText");
-          var sub = getCellRaw("SubText");
-          var add = getCellRaw("AddText");
+          if (main.found) base.mainText = main.value;
+          if (sub.found) base.subText = sub.value;
+          if (add.found) base.addText = add.value;
           
-          base.mainText = main;
-          base.subText = sub;
-          base.addText = add;
-          
-          base.priceType = parseNumericCell("PriceType", base.priceType, 1, true);
-          base.priceValue = parseNumericCell("Price", base.priceValue, 0, false);
-          base.prevPriceValue = parseNumericCell("PrevPrice", base.prevPriceValue, 0, false);
-          base.dealQty = parseNumericCell("DealQty", base.dealQty, 0, true);
-          base.dealPrice = parseNumericCell("DealPrice", base.dealPrice, 0, false);
-          base.showUnit = parseNumericCell("ShowUnit", base.showUnit, 0, true);
-          base.showDealUnit = parseNumericCell("ShowDealUnit", base.showDealUnit, 0, true);
-          base.useDefaultBG = parseNumericCell("UseDefaultBG", base.useDefaultBG, 1, true);
-          base.productIndex = parseNumericCell("ProductIndex", base.productIndex, idx, true);
-          base.bgSideManual = parseNumericCell("BGSideManual", base.bgSideManual, 1, true);
-          base.bgColorManual = parseNumericCell("BGColorManual", base.bgColorManual, 1, true);
-          base.useAutoWhite = parseNumericCell("UseAutoWhite", base.useAutoWhite, 1, true);
-          base.whiteWidth = parseNumericCell("WhiteWidth", base.whiteWidth, 2, true);
-          base.showPrevPrice = parseNumericCell("ShowPrevPrice", base.showPrevPrice, 0, true);
-          base.prevXOffset = parseNumericCell("PrevXOffset", base.prevXOffset, 0, false);
-          base.themeOverride = parseNumericCell("ThemeOverride", base.themeOverride, 1, true);
-          base.priceBgSelection = parseNumericCell("PriceBGSelection", base.priceBgSelection, 1, true);
-          base.priceDirectionOverride = parseNumericCell("PriceDirectionOverride", base.priceDirectionOverride, 1, true);
-          base.regDecimalOffset = parseNumericCell("RegDecimalOffset", base.regDecimalOffset, 0, false);
-          base.regCurrencyOffset = parseNumericCell("RegCurrencyOffset", base.regCurrencyOffset, 0, false);
-          base.regUnitOffset = parseNumericCell("RegUnitOffset", base.regUnitOffset, 0, false);
-          base.prevDecimalOffset = parseNumericCell("PrevDecimalOffset", base.prevDecimalOffset, 0, false);
-          base.prevCurrencyOffset = parseNumericCell("PrevCurrencyOffset", base.prevCurrencyOffset, 0, false);
-          base.prevUnitOffset = parseNumericCell("PrevUnitOffset", base.prevUnitOffset, 0, false);
-          base.dealQtyGap = parseNumericCell("DealQtyGap", base.dealQtyGap, 0, false);
-          base.dealSepGap = parseNumericCell("DealSepGap", base.dealSepGap, 0, false);
-          base.dealCurGap = parseNumericCell("DealCurGap", base.dealCurGap, 0, false);
+          base.priceType = parseNumericCell(["PriceType", "Type"], base.priceType, 1, true);
+          base.priceValue = parseNumericCell(["Price", "PriceValue"], base.priceValue, 0, false);
+          base.prevPriceValue = parseNumericCell(["PrevPrice", "PreviousPrice"], base.prevPriceValue, 0, false);
+          base.dealQty = parseNumericCell(["DealQty", "Quantity"], base.dealQty, 0, true);
+          base.dealPrice = parseNumericCell(["DealPrice"], base.dealPrice, 0, false);
+          base.showUnit = parseNumericCell(["ShowUnit"], base.showUnit, 0, true);
+          base.showDealUnit = parseNumericCell(["ShowDealUnit"], base.showDealUnit, 0, true);
+          base.useDefaultBG = parseNumericCell(["UseDefaultBG", "UseDefaultBg"], base.useDefaultBG, 1, true);
+          base.productIndex = parseNumericCell(["ProductIndex"], base.productIndex, idx, true);
+          base.bgSideManual = parseNumericCell(["BGSideManual", "BgSideManual"], base.bgSideManual, 1, true);
+          base.bgColorManual = parseNumericCell(["BGColorManual", "BgColorManual"], base.bgColorManual, 1, true);
+          base.useAutoWhite = parseNumericCell(["UseAutoWhite"], base.useAutoWhite, 1, true);
+          base.whiteWidth = parseNumericCell(["WhiteWidth"], base.whiteWidth, 2, true);
+          base.showPrevPrice = parseNumericCell(["ShowPrevPrice"], base.showPrevPrice, 0, true);
+          base.prevXOffset = parseNumericCell(["PrevXOffset", "PrevX", "PrevXOffset\n"], base.prevXOffset, 0, false);
+          base.themeOverride = parseNumericCell(["ThemeOverride"], base.themeOverride, 1, true);
+          base.priceBgSelection = parseNumericCell(["PriceBGSelection", "PriceBgSelection"], base.priceBgSelection, 1, true);
+          base.priceDirectionOverride = parseNumericCell(["PriceDirectionOverride"], base.priceDirectionOverride, 1, true);
+          base.regDecimalOffset = parseNumericCell(["RegDecimalOffset"], base.regDecimalOffset, 0, false);
+          base.regCurrencyOffset = parseNumericCell(["RegCurrencyOffset"], base.regCurrencyOffset, 0, false);
+          base.regUnitOffset = parseNumericCell(["RegUnitOffset"], base.regUnitOffset, 0, false);
+          base.prevDecimalOffset = parseNumericCell(["PrevDecimalOffset"], base.prevDecimalOffset, 0, false);
+          base.prevCurrencyOffset = parseNumericCell(["PrevCurrencyOffset"], base.prevCurrencyOffset, 0, false);
+          base.prevUnitOffset = parseNumericCell(["PrevUnitOffset"], base.prevUnitOffset, 0, false);
+          base.dealQtyGap = parseNumericCell(["DealQtyGap"], base.dealQtyGap, 0, false);
+          base.dealSepGap = parseNumericCell(["DealSepGap"], base.dealSepGap, 0, false);
+          base.dealCurGap = parseNumericCell(["DealCurGap"], base.dealCurGap, 0, false);
           
           try { base.warnOverflow = calcOverflowWarn(base.mainText); } catch(_){}
           
@@ -1675,7 +1688,7 @@ function importCompleteProjectFromCSV(){
     if (sharedStyleLoad && sharedStyleLoad.onClick) sharedStyleLoad.onClick();
     if (sharedTalachLoad && sharedTalachLoad.onClick) sharedTalachLoad.onClick();
     if (sharedColorsLoad && sharedColorsLoad.onClick) sharedColorsLoad.onClick();
-    if (report.renderImported && sharedRenderDetect && sharedRenderDetect.onClick) sharedRenderDetect.onClick();
+    if (report.renderImported && sharedRenderApplyUI) sharedRenderApplyUI();
   }catch(_){}
   
   alert("✅ Import Complete!\n\n" +
@@ -1765,11 +1778,8 @@ var sharedStyleLoad = null;
 var sharedTalachLoad = null;
 var sharedColorsLoad = null;
 var sharedRenderDetect = null;
-
-// Shared references for complete import/export helpers (Tab 2 data)
-var sharedSalesSlots = null;
-var sharedRowsSalesUI = null;
-var sharedGetSalesCount = function(){ return 21; };
+var sharedRenderApplyUI = null;
+var sharedSetProductCount = null;
 
 function readRowFromProject(i) {
   var row = new ProductRow(i);
@@ -3340,6 +3350,7 @@ function rebuildRows() {
     rowsHolder.remove(rowsUI[j].group);
   }
   rowsUI = [];
+  sharedRowsUI = rowsUI;
   for (var k = 1; k <= MAX_PRODUCTS; k++) {
     rowsUI.push(makeRow(k));
   }
@@ -3518,6 +3529,14 @@ function onCountChanged() {
 }
 etCount.onChange = onCountChanged;
 etCount.onDeactivate = onCountChanged;
+sharedSetProductCount = function(nextCount){
+  state.productCount = clampInt(nextCount, 1, MAX_PRODUCTS, state.productCount);
+  etCount.text = "" + state.productCount;
+  applyProductCountToUI();
+  for (var i = 1; i <= state.productCount; i++) {
+    rowToUi(state.rows[i-1], rowsUI[i-1]);
+  }
+};
 
 
 btnSelAll.onClick = function() {
@@ -3784,9 +3803,6 @@ for (var s = 1; s <= 21; s++) {
     saleDirection: 1
   });
 }
-
-// expose Tab 2 data for complete import/export helpers
-sharedSalesSlots = salesSlots;
 
 // expose Tab 2 data for complete import/export helpers
 sharedSalesSlots = salesSlots;
@@ -4236,6 +4252,7 @@ function rebuildSalesRows() {
   }
   
   rowsSalesUI = [];
+  sharedRowsSalesUI = rowsSalesUI;
   
   for (var m = 1; m <= MAX_SALES; m++) {
     rowsSalesUI.push(makeSalesRow(m));
@@ -5534,6 +5551,35 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
       presetDropdown.add("item", "Best Settings");
       presetDropdown.selection = 0;
     }
+
+    sharedRenderApplyUI = function() {
+      if (!state || !state.renderConfig) return;
+      var rc = state.renderConfig;
+
+      function selectDropByText(dd, txt){
+        if (!dd || !dd.items) return;
+        var target = String(txt);
+        for (var i = 0; i < dd.items.length; i++) {
+          if (String(dd.items[i].text) === target) {
+            dd.selection = i;
+            return;
+          }
+        }
+      }
+
+      if (rc.productCount) selectDropByText(productCountDropdown, rc.productCount);
+      if (rc.saleCount !== undefined && rc.saleCount !== null) selectDropByText(saleCountDropdown, rc.saleCount);
+
+      if (rc.renderSale !== undefined) cbSale.value = !!rc.renderSale;
+      if (rc.renderEntrance !== undefined) cbEntrance.value = !!rc.renderEntrance;
+      if (rc.renderPardes !== undefined) cbPardes.value = !!rc.renderPardes;
+      if (rc.renderOutside !== undefined) cbOutside.value = !!rc.renderOutside;
+      if (rc.renderDrinks !== undefined) cbDrinks.value = !!rc.renderDrinks;
+
+      if (rc.outputFolder !== undefined) folderPathEdit.text = rc.outputFolder;
+      if (rc.fileNameBase !== undefined) fileNameEdit.text = rc.fileNameBase;
+      if (rc.outputModule !== undefined) selectDropByText(presetDropdown, rc.outputModule);
+    };
 
     tabRender.add("panel", undefined, "").preferredSize.height = 2;
 
