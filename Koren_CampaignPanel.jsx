@@ -1160,7 +1160,7 @@ function exportCompleteProjectToCSV(){
       var srcVal = getSaleSliderValue("PRICE Sale -" + s);
       if (srcVal !== null) src = Math.max(0, Math.min(MAX_PRODUCTS, Math.round(srcVal)));
     }catch(_){ src = 0; }
-    if (!src && salesSlots && salesSlots[s-1]) src = salesSlots[s-1].sourceProductIndex || 0;
+    if (!src && typeof salesSlots !== "undefined" && salesSlots && salesSlots[s-1]) src = salesSlots[s-1].sourceProductIndex || 0;
 
     var saleRow = [
       s,
@@ -1433,25 +1433,35 @@ function importCompleteProjectFromCSV(){
           };
 
           var srcValue = getSaleCell("SourceProductIndex");
-          if (srcValue === "") srcValue = String(salesSlots[slot - 1].sourceProductIndex || 0);
+          if (srcValue === "" && typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
+            srcValue = String(salesSlots[slot - 1].sourceProductIndex || 0);
+          }
           var srcIdx = parseInt(srcValue, 10);
           if (isNaN(srcIdx)) {
             report.errors.push("SALES row " + sl + " invalid numeric value for SourceProductIndex: '" + srcValue + "'");
-            srcIdx = salesSlots[slot - 1].sourceProductIndex || 0;
+            if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
+              srcIdx = salesSlots[slot - 1].sourceProductIndex || 0;
+            } else {
+              srcIdx = 0;
+            }
           }
           srcIdx = Math.max(0, Math.min(MAX_PRODUCTS, srcIdx));
-          salesSlots[slot - 1].sourceProductIndex = srcIdx;
+          if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
+            salesSlots[slot - 1].sourceProductIndex = srcIdx;
+          }
 
-          if (slot <= rowsSalesUI.length) {
+          if (typeof rowsSalesUI !== "undefined" && rowsSalesUI && slot <= rowsSalesUI.length) {
             rowsSalesUI[slot - 1].source.selection = rowsSalesUI[slot - 1].source.items[srcIdx];
             rowsSalesUI[slot - 1].updateFromSource();
           }
 
-          salesSlots[slot - 1].saleUseAutoWhite = saleConfig.saleUseAutoWhite;
-          salesSlots[slot - 1].saleWhiteWidth = saleConfig.saleWhiteWidth;
-          salesSlots[slot - 1].salePrevXOffset = saleConfig.salePrevXOffset;
-          salesSlots[slot - 1].saleBgSelection = saleConfig.saleBgSelection;
-          salesSlots[slot - 1].saleDirection = saleConfig.saleDirection;
+          if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
+            salesSlots[slot - 1].saleUseAutoWhite = saleConfig.saleUseAutoWhite;
+            salesSlots[slot - 1].saleWhiteWidth = saleConfig.saleWhiteWidth;
+            salesSlots[slot - 1].salePrevXOffset = saleConfig.salePrevXOffset;
+            salesSlots[slot - 1].saleBgSelection = saleConfig.saleBgSelection;
+            salesSlots[slot - 1].saleDirection = saleConfig.saleDirection;
+          }
           report.sales++;
         }
       }
@@ -1566,18 +1576,21 @@ function importCompleteProjectFromCSV(){
     for (var j = 1; j <= state.productCount; j++){
       rowToUi(state.rows[j-1], rowsUI[j-1]);
     }
-    for (var sru = 1; sru <= Math.min(salesCount, rowsSalesUI.length); sru++){
-      var ui = rowsSalesUI[sru - 1];
-      var slotCfg = salesSlots[sru - 1];
-      if (slotCfg.sourceProductIndex >= 0 && slotCfg.sourceProductIndex < ui.source.items.length) {
-        ui.source.selection = ui.source.items[slotCfg.sourceProductIndex];
+    if (typeof salesCount !== "undefined" && typeof rowsSalesUI !== "undefined" && typeof salesSlots !== "undefined" && rowsSalesUI && salesSlots) {
+      for (var sru = 1; sru <= Math.min(salesCount, rowsSalesUI.length); sru++){
+        var ui = rowsSalesUI[sru - 1];
+        var slotCfg = salesSlots[sru - 1];
+        if (!ui || !slotCfg) continue;
+        if (slotCfg.sourceProductIndex >= 0 && slotCfg.sourceProductIndex < ui.source.items.length) {
+          ui.source.selection = ui.source.items[slotCfg.sourceProductIndex];
+        }
+        ui.autoW.value = !!slotCfg.saleUseAutoWhite;
+        ui.white.selection = Math.max(0, Math.min(2, (slotCfg.saleWhiteWidth || 1) - 1));
+        ui.bgColor.selection = Math.max(0, Math.min(16, (slotCfg.saleBgSelection || 1) - 1));
+        ui.side.selection = Math.max(0, Math.min(2, (slotCfg.saleDirection || 1) - 1));
+        ui.prevX.value = slotCfg.salePrevXOffset || 0;
+        ui.refreshEnabled();
       }
-      ui.autoW.value = !!slotCfg.saleUseAutoWhite;
-      ui.white.selection = Math.max(0, Math.min(2, (slotCfg.saleWhiteWidth || 1) - 1));
-      ui.bgColor.selection = Math.max(0, Math.min(16, (slotCfg.saleBgSelection || 1) - 1));
-      ui.side.selection = Math.max(0, Math.min(2, (slotCfg.saleDirection || 1) - 1));
-      ui.prevX.value = slotCfg.salePrevXOffset || 0;
-      ui.refreshEnabled();
     }
   }catch(_){}
   
