@@ -1058,6 +1058,27 @@ function parseCSVLine(line){
   return result;
 }
 
+function normalizeCsvHeaderKey(key){
+  var s = trimString(String(key || ""));
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function buildCsvHeaderMap(headers){
+  var m = {};
+  for (var i = 0; i < headers.length; i++){
+    m[normalizeCsvHeaderKey(headers[i])] = i;
+  }
+  return m;
+}
+
+function getCsvCellByKeys(cells, map, keys){
+  for (var i = 0; i < keys.length; i++){
+    var idx = map[normalizeCsvHeaderKey(keys[i])];
+    if (idx !== undefined && idx < cells.length) return cells[idx];
+  }
+  return "";
+}
+
 // ------------------------------
 // Export Complete Project to CSV
 // ------------------------------
@@ -1346,21 +1367,32 @@ function importCompleteProjectFromCSV(){
       var prodLines = sections.PRODUCTS;
       if (prodLines.length > 1){
         var headers = prodLines[0];
-        var headerMap = {};
-        for (var h = 0; h < headers.length; h++){
-          headerMap[trimString(headers[h])] = h;
-        }
+        var headerMap = buildCsvHeaderMap(headers);
         
         for (var p = 1; p < prodLines.length; p++){
           var cells = prodLines[p];
-          var idx = parseInt(cells[headerMap.Index] || "0", 10);
+          var idx = parseInt(getCsvCellByKeys(cells, headerMap, ["Index"]), 10) || 0;
           if (idx < 1 || idx > state.productCount) continue;
           
           var base = state.rows[idx-1];
           
-          function getCellTrim(key){ 
-            var i = headerMap[key]; 
-            return (i !== undefined && i < cells.length) ? trimString(cells[i]) : ""; 
+          function getCellRaw(key){
+            return String(getCsvCellByKeys(cells, headerMap, [key]) || "");
+          }
+          function isValidNumber(v){
+            if (v === null || v === undefined) return false;
+            if (trimString(v) === "") return false;
+            return !isNaN(Number(v));
+          }
+          function parseNumericCell(key, currentValue, fallbackValue, isInt){
+            var raw = getCellRaw(key);
+            var t = trimString(raw);
+            if (t === "") return fallbackValue;
+            if (!isValidNumber(raw)){
+              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + key + ": '" + raw + "'");
+              return currentValue;
+            }
+            return isInt ? parseInt(t, 10) : parseFloat(t);
           }
           function getCellRaw(key){
             var i = headerMap[key];
@@ -1432,30 +1464,27 @@ function importCompleteProjectFromCSV(){
       var saleLines = sections.SALES;
       if (saleLines.length > 1){
         var saleHeaders = saleLines[0];
-        var saleMap = {};
-        for (var sh = 0; sh < saleHeaders.length; sh++){
-          saleMap[trimString(saleHeaders[sh])] = sh;
-        }
+        var saleMap = buildCsvHeaderMap(saleHeaders);
         
         for (var sl = 1; sl < saleLines.length; sl++){
           var saleCells = saleLines[sl];
-          var slot = parseInt(saleCells[saleMap.Slot] || "0", 10);
+          var slot = parseInt(getCsvCellByKeys(saleCells, saleMap, ["Slot"]), 10) || 0;
           if (slot < 1 || slot > 21) continue;
           
-          function getSaleCell(key){ 
-            var i = saleMap[key]; 
-            return (i !== undefined && i < saleCells.length) ? trimString(saleCells[i]) : ""; 
+          function getSaleCell(keys){
+            var raw = getCsvCellByKeys(saleCells, saleMap, keys);
+            return trimString(raw);
           }
           
           var saleConfig = {
-            saleUseAutoWhite: parseInt(getSaleCell("UseAutoWhite"), 10) === 1,
-            saleWhiteWidth: parseInt(getSaleCell("WhiteWidth"), 10) || 2,
-            salePrevXOffset: parseFloat(getSaleCell("PrevXOffset")) || 0,
-            saleBgSelection: parseInt(getSaleCell("BGSelection"), 10) || 1,
-            saleDirection: parseInt(getSaleCell("Direction"), 10) || 1
+            saleUseAutoWhite: parseInt(getSaleCell(["UseAutoWhite"]), 10) === 1,
+            saleWhiteWidth: parseInt(getSaleCell(["WhiteWidth"]), 10) || 2,
+            salePrevXOffset: parseFloat(getSaleCell(["PrevXOffset", "PrevXOffset\\n", "PrevX"] )) || 0,
+            saleBgSelection: parseInt(getSaleCell(["BGSelection", "BG Color", "BGColor"]), 10) || 1,
+            saleDirection: parseInt(getSaleCell(["Direction", "Side"]), 10) || 1
           };
 
-          var srcValue = getSaleCell("SourceProductIndex");
+          var srcValue = getSaleCell(["SourceProductIndex", "SourceProduct", "Source"]);
           if (srcValue === "" && sharedSalesSlots && sharedSalesSlots[slot - 1]) {
             srcValue = String(sharedSalesSlots[slot - 1].sourceProductIndex || 0);
           }
@@ -1584,8 +1613,33 @@ function importCompleteProjectFromCSV(){
     // Import RENDER
     // ═══════════════════════════════════════════════════════════════
     if (sections.RENDER){
-      // Render settings are intentionally not imported from CSV.
-      report.renderImported = false;
+      var renderLines = sections.RENDER;
+      var renderData = {};
+      
+      for (var rl = 1; rl < renderLines.length; rl++){
+        var renderCells = renderLines[rl];
+        if (renderCells.length >= 2){
+          var rProp = trimString(renderCells[0]);
+          var rVal = trimString(renderCells[1]);
+          
+          if (rProp === "ProductCount") renderData.productCount = parseInt(rVal, 10) || 0;
+          else if (rProp === "SaleCount") renderData.saleCount = parseInt(rVal, 10) || 0;
+          else if (rProp === "RenderSale") renderData.renderSale = (parseInt(rVal, 10) === 1);
+          else if (rProp === "RenderEntrance") renderData.renderEntrance = (parseInt(rVal, 10) === 1);
+          else if (rProp === "RenderPardes") renderData.renderPardes = (parseInt(rVal, 10) === 1);
+          else if (rProp === "RenderOutside") renderData.renderOutside = (parseInt(rVal, 10) === 1);
+          else if (rProp === "RenderDrinks") renderData.renderDrinks = (parseInt(rVal, 10) === 1);
+          else if (rProp === "OutputFolder") renderData.outputFolder = rVal;
+          else if (rProp === "FileNameBase") renderData.fileNameBase = rVal;
+          else if (rProp === "OutputModule") renderData.outputModule = rVal;
+        }
+      }
+      
+      if (!state.renderConfig) state.renderConfig = {};
+      for (var key in renderData) {
+        if (renderData.hasOwnProperty(key)) state.renderConfig[key] = renderData[key];
+      }
+      report.renderImported = true;
     }
     
   }catch(e){
@@ -1596,8 +1650,10 @@ function importCompleteProjectFromCSV(){
   
   // Refresh UI
   try{
-    for (var j = 1; j <= state.productCount; j++){
-      rowToUi(state.rows[j-1], rowsUI[j-1]);
+    if (sharedRowsUI) {
+      for (var j = 1; j <= state.productCount && j <= sharedRowsUI.length; j++){
+        rowToUi(state.rows[j-1], sharedRowsUI[j-1]);
+      }
     }
     if (sharedRowsSalesUI && sharedSalesSlots) {
       var sharedSalesCount = sharedGetSalesCount ? sharedGetSalesCount() : sharedRowsSalesUI.length;
@@ -1616,6 +1672,10 @@ function importCompleteProjectFromCSV(){
         ui.refreshEnabled();
       }
     }
+    if (sharedStyleLoad && sharedStyleLoad.onClick) sharedStyleLoad.onClick();
+    if (sharedTalachLoad && sharedTalachLoad.onClick) sharedTalachLoad.onClick();
+    if (sharedColorsLoad && sharedColorsLoad.onClick) sharedColorsLoad.onClick();
+    if (report.renderImported && sharedRenderDetect && sharedRenderDetect.onClick) sharedRenderDetect.onClick();
   }catch(_){}
   
   alert("✅ Import Complete!\n\n" +
@@ -1695,6 +1755,16 @@ var state = {
     return a;
   })()
 };
+
+// Shared references for complete import/export helpers (Tab 2 data)
+var sharedSalesSlots = null;
+var sharedRowsSalesUI = null;
+var sharedGetSalesCount = function(){ return 21; };
+var sharedRowsUI = null;
+var sharedStyleLoad = null;
+var sharedTalachLoad = null;
+var sharedColorsLoad = null;
+var sharedRenderDetect = null;
 
 // Shared references for complete import/export helpers (Tab 2 data)
 var sharedSalesSlots = null;
@@ -2379,6 +2449,7 @@ btnStyleLoad.onClick = function() {
   updateSalesVisibility();
   alert("✅ Loaded from AE!");
 };
+sharedStyleLoad = btnStyleLoad;
 
 // Apply button
 btnStyleApply.onClick = function() {
@@ -2542,6 +2613,7 @@ sb.value = 0;
 
 
 var rowsUI = [];
+sharedRowsUI = rowsUI;
 
 
 var currentRangeFrom = 1;
@@ -3716,6 +3788,9 @@ for (var s = 1; s <= 21; s++) {
 // expose Tab 2 data for complete import/export helpers
 sharedSalesSlots = salesSlots;
 
+// expose Tab 2 data for complete import/export helpers
+sharedSalesSlots = salesSlots;
+
 
 // ✅ TOP CONTROLS - עם כפתורים מחודשים + TOOLTIPS
 var topSales = tabSales.add("group");
@@ -4840,6 +4915,7 @@ btnLoadTalach.onClick = function() {
     alert("❌ " + e.toString());
   }
 };
+sharedTalachLoad = btnLoadTalach;
 
 btnForceRefreshSales.onClick = function() {
   app.beginUndoGroup("Force Refresh Sales");
@@ -5222,6 +5298,7 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
 
     btnColorsLoad.onClick = loadColorsFromAE;
     btnColorsRefresh.onClick = loadColorsFromAE;
+    sharedColorsLoad = btnColorsLoad;
 
 
     // END TAB 5 CODE BLOCK
@@ -5326,6 +5403,7 @@ tab4Footer.add("statictext", undefined, "פורמט: CSV (UTF-8 with BOM)");
         alert(result.message);
       }
     };
+    sharedRenderDetect = btnDetect;
 
     tabRender.add("panel", undefined, "").preferredSize.height = 2;
 
