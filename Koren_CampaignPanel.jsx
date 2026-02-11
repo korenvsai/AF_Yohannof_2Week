@@ -1394,6 +1394,25 @@ function importCompleteProjectFromCSV(){
             }
             return isInt ? parseInt(t, 10) : parseFloat(t);
           }
+          function getCellRaw(key){
+            var i = headerMap[key];
+            return (i !== undefined && i < cells.length) ? String(cells[i] || "") : "";
+          }
+          function isValidNumber(v){
+            if (v === null || v === undefined) return false;
+            if (trimString(v) === "") return false;
+            return !isNaN(Number(v));
+          }
+          function parseNumericCell(key, currentValue, fallbackValue, isInt){
+            var raw = getCellRaw(key);
+            var t = trimString(raw);
+            if (t === "") return fallbackValue;
+            if (!isValidNumber(raw)){
+              report.errors.push("PRODUCTS row " + p + " invalid numeric value for " + key + ": '" + raw + "'");
+              return currentValue;
+            }
+            return isInt ? parseInt(t, 10) : parseFloat(t);
+          }
           
           var main = getCellRaw("MainText");
           var sub = getCellRaw("SubText");
@@ -1746,6 +1765,11 @@ var sharedStyleLoad = null;
 var sharedTalachLoad = null;
 var sharedColorsLoad = null;
 var sharedRenderDetect = null;
+
+// Shared references for complete import/export helpers (Tab 2 data)
+var sharedSalesSlots = null;
+var sharedRowsSalesUI = null;
+var sharedGetSalesCount = function(){ return 21; };
 
 function readRowFromProject(i) {
   var row = new ProductRow(i);
@@ -3760,6 +3784,9 @@ for (var s = 1; s <= 21; s++) {
     saleDirection: 1
   });
 }
+
+// expose Tab 2 data for complete import/export helpers
+sharedSalesSlots = salesSlots;
 
 // expose Tab 2 data for complete import/export helpers
 sharedSalesSlots = salesSlots;
