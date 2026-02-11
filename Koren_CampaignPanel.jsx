@@ -1160,7 +1160,7 @@ function exportCompleteProjectToCSV(){
       var srcVal = getSaleSliderValue("PRICE Sale -" + s);
       if (srcVal !== null) src = Math.max(0, Math.min(MAX_PRODUCTS, Math.round(srcVal)));
     }catch(_){ src = 0; }
-    if (!src && typeof salesSlots !== "undefined" && salesSlots && salesSlots[s-1]) src = salesSlots[s-1].sourceProductIndex || 0;
+    if (!src && sharedSalesSlots && sharedSalesSlots[s-1]) src = sharedSalesSlots[s-1].sourceProductIndex || 0;
 
     var saleRow = [
       s,
@@ -1234,7 +1234,30 @@ function exportCompleteProjectToCSV(){
   }catch(e){}
   lines.push("");
   
-  // Render settings are intentionally excluded from import/export flow.
+  lines.push("SECTION,RENDER");
+  lines.push("Property,Value");
+  
+  try {
+    if (state && state.renderConfig) {
+      lines.push("ProductCount," + (state.renderConfig.productCount || productCount));
+      lines.push("SaleCount," + (state.renderConfig.saleCount || 0));
+      lines.push("RenderSale," + (state.renderConfig.renderSale ? 1 : 0));
+      lines.push("RenderEntrance," + (state.renderConfig.renderEntrance ? 1 : 0));
+      lines.push("RenderPardes," + (state.renderConfig.renderPardes ? 1 : 0));
+      lines.push("RenderOutside," + (state.renderConfig.renderOutside ? 1 : 0));
+      lines.push("RenderDrinks," + (state.renderConfig.renderDrinks ? 1 : 0));
+      lines.push("OutputFolder," + csvEscapeField(state.renderConfig.outputFolder || ""));
+      lines.push("FileNameBase," + csvEscapeField(state.renderConfig.fileNameBase || ""));
+      lines.push("OutputModule," + csvEscapeField(state.renderConfig.outputModule || ""));
+    } else {
+      lines.push("ProductCount," + productCount);
+      lines.push("SaleCount,0");
+    }
+  } catch(e) {
+    lines.push("ProductCount," + productCount);
+    lines.push("SaleCount,0");
+  }
+  lines.push("");
   
   var content = lines.join("\n");
   var w = writeTextFileUTF8_BOM(file, content);
@@ -1433,34 +1456,34 @@ function importCompleteProjectFromCSV(){
           };
 
           var srcValue = getSaleCell("SourceProductIndex");
-          if (srcValue === "" && typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
-            srcValue = String(salesSlots[slot - 1].sourceProductIndex || 0);
+          if (srcValue === "" && sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            srcValue = String(sharedSalesSlots[slot - 1].sourceProductIndex || 0);
           }
           var srcIdx = parseInt(srcValue, 10);
           if (isNaN(srcIdx)) {
             report.errors.push("SALES row " + sl + " invalid numeric value for SourceProductIndex: '" + srcValue + "'");
-            if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
-              srcIdx = salesSlots[slot - 1].sourceProductIndex || 0;
+            if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+              srcIdx = sharedSalesSlots[slot - 1].sourceProductIndex || 0;
             } else {
               srcIdx = 0;
             }
           }
           srcIdx = Math.max(0, Math.min(MAX_PRODUCTS, srcIdx));
-          if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
-            salesSlots[slot - 1].sourceProductIndex = srcIdx;
+          if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            sharedSalesSlots[slot - 1].sourceProductIndex = srcIdx;
           }
 
-          if (typeof rowsSalesUI !== "undefined" && rowsSalesUI && slot <= rowsSalesUI.length) {
-            rowsSalesUI[slot - 1].source.selection = rowsSalesUI[slot - 1].source.items[srcIdx];
-            rowsSalesUI[slot - 1].updateFromSource();
+          if (sharedRowsSalesUI && slot <= sharedRowsSalesUI.length) {
+            sharedRowsSalesUI[slot - 1].source.selection = sharedRowsSalesUI[slot - 1].source.items[srcIdx];
+            sharedRowsSalesUI[slot - 1].updateFromSource();
           }
 
-          if (typeof salesSlots !== "undefined" && salesSlots && salesSlots[slot - 1]) {
-            salesSlots[slot - 1].saleUseAutoWhite = saleConfig.saleUseAutoWhite;
-            salesSlots[slot - 1].saleWhiteWidth = saleConfig.saleWhiteWidth;
-            salesSlots[slot - 1].salePrevXOffset = saleConfig.salePrevXOffset;
-            salesSlots[slot - 1].saleBgSelection = saleConfig.saleBgSelection;
-            salesSlots[slot - 1].saleDirection = saleConfig.saleDirection;
+          if (sharedSalesSlots && sharedSalesSlots[slot - 1]) {
+            sharedSalesSlots[slot - 1].saleUseAutoWhite = saleConfig.saleUseAutoWhite;
+            sharedSalesSlots[slot - 1].saleWhiteWidth = saleConfig.saleWhiteWidth;
+            sharedSalesSlots[slot - 1].salePrevXOffset = saleConfig.salePrevXOffset;
+            sharedSalesSlots[slot - 1].saleBgSelection = saleConfig.saleBgSelection;
+            sharedSalesSlots[slot - 1].saleDirection = saleConfig.saleDirection;
           }
           report.sales++;
         }
@@ -1576,10 +1599,11 @@ function importCompleteProjectFromCSV(){
     for (var j = 1; j <= state.productCount; j++){
       rowToUi(state.rows[j-1], rowsUI[j-1]);
     }
-    if (typeof salesCount !== "undefined" && typeof rowsSalesUI !== "undefined" && typeof salesSlots !== "undefined" && rowsSalesUI && salesSlots) {
-      for (var sru = 1; sru <= Math.min(salesCount, rowsSalesUI.length); sru++){
-        var ui = rowsSalesUI[sru - 1];
-        var slotCfg = salesSlots[sru - 1];
+    if (sharedRowsSalesUI && sharedSalesSlots) {
+      var sharedSalesCount = sharedGetSalesCount ? sharedGetSalesCount() : sharedRowsSalesUI.length;
+      for (var sru = 1; sru <= Math.min(sharedSalesCount, sharedRowsSalesUI.length); sru++){
+        var ui = sharedRowsSalesUI[sru - 1];
+        var slotCfg = sharedSalesSlots[sru - 1];
         if (!ui || !slotCfg) continue;
         if (slotCfg.sourceProductIndex >= 0 && slotCfg.sourceProductIndex < ui.source.items.length) {
           ui.source.selection = ui.source.items[slotCfg.sourceProductIndex];
@@ -1671,6 +1695,11 @@ var state = {
     return a;
   })()
 };
+
+// Shared references for complete import/export helpers (Tab 2 data)
+var sharedSalesSlots = null;
+var sharedRowsSalesUI = null;
+var sharedGetSalesCount = function(){ return 21; };
 
 function readRowFromProject(i) {
   var row = new ProductRow(i);
@@ -3569,6 +3598,7 @@ btnMegaLoad.onClick = function() {
   var confirmMsg = "🚀 MEGA LOAD - Load ALL data from project?\n\n";
   confirmMsg += "This will load:\n";
   confirmMsg += "✅ 20 Products (TAB 1)\n";
+  confirmMsg += "✅ Sale Slots (TAB 2)\n";
   confirmMsg += "✅ Project Styling (TAB 0)\n";
   confirmMsg += "✅ Talach + Dates (TAB 3)\n";
   confirmMsg += "✅ Color Palette (TAB 5)\n";
@@ -3604,6 +3634,18 @@ btnMegaLoad.onClick = function() {
       report += "✅ Styling loaded (TAB 0)\n";
     } catch (e) {
       report += "⚠️ Styling failed (TAB 0 may not exist)\n";
+    }
+
+    // TAB 2: Sales
+    try {
+      if (typeof btnLoadSales !== 'undefined' && btnLoadSales && btnLoadSales.onClick) {
+        btnLoadSales.onClick();
+        report += "✅ Sale slots loaded (TAB 2)\n";
+      } else {
+        report += "⚠️ Sales button not found (TAB 2)\n";
+      }
+    } catch (e) {
+      report += "❌ Sales failed: " + e.toString() + "\n";
     }
     
     // TAB 3: Talach + Dates
@@ -3670,6 +3712,9 @@ for (var s = 1; s <= 21; s++) {
     saleDirection: 1
   });
 }
+
+// expose Tab 2 data for complete import/export helpers
+sharedSalesSlots = salesSlots;
 
 
 // ✅ TOP CONTROLS - עם כפתורים מחודשים + TOOLTIPS
@@ -3797,6 +3842,9 @@ sbSales.value = 0;
 
 var rowsSalesUI = [];
 var salesCount = 21;
+
+sharedRowsSalesUI = rowsSalesUI;
+sharedGetSalesCount = function(){ return salesCount; };
 var MAX_SALES = 21;
 
 
