@@ -1398,24 +1398,30 @@ function importCompleteProjectFromCSV(){
         
         for (var p = 1; p < prodLines.length; p++){
           var cells = prodLines[p];
-          var idx = parseInt(getCsvCellByKeys(cells, headerMap, ["Index"]), 10) || 0;
-          if (idx < 1 || idx > MAX_PRODUCTS) continue;
-          
-          var base = state.rows[idx-1];
-          
-          function getCellRaw(keys){
+
+          function getCellRaw(keys, fallbackIndex){
             var keyArr = (keys && keys.push) ? keys : [keys];
             var result = getCsvCellResultByKeys(cells, headerMap, keyArr);
+            if (!result.found && fallbackIndex !== undefined && fallbackIndex !== null && fallbackIndex < cells.length){
+              result = { found: true, value: cells[fallbackIndex] };
+            }
             return { found: result.found, value: String(result.value || "") };
           }
+
+          var idxCell = getCellRaw(["Index", "Idx", "#"], 0);
+          var idx = parseInt(trimString(idxCell.value), 10) || 0;
+          if (idx < 1 || idx > MAX_PRODUCTS) continue;
+
+          var base = state.rows[idx-1];
+
           function isValidNumber(v){
             if (v === null || v === undefined) return false;
             if (trimString(v) === "") return false;
             return !isNaN(Number(v));
           }
-          function parseNumericCell(keys, currentValue, fallbackValue, isInt){
+          function parseNumericCell(keys, fallbackIndex, currentValue, fallbackValue, isInt){
             var keyArr = (keys && keys.push) ? keys : [keys];
-            var rawObj = getCellRaw(keyArr);
+            var rawObj = getCellRaw(keyArr, fallbackIndex);
             if (!rawObj.found) return currentValue;
             var raw = rawObj.value;
             var t = trimString(raw);
@@ -1427,44 +1433,44 @@ function importCompleteProjectFromCSV(){
             return isInt ? parseInt(t, 10) : parseFloat(t);
           }
 
-          var main = getCellRaw(["MainText", "Main", "Name"]);
-          var sub = getCellRaw(["SubText", "Sub"]);
-          var add = getCellRaw(["AddText", "SmallText", "Add"]);
-          
+          var main = getCellRaw(["MainText", "Main", "Name"], 1);
+          var sub = getCellRaw(["SubText", "Sub"], 2);
+          var add = getCellRaw(["AddText", "SmallText", "Add"], 3);
+
           if (main.found) base.mainText = main.value;
           if (sub.found) base.subText = sub.value;
           if (add.found) base.addText = add.value;
-          
-          base.priceType = parseNumericCell(["PriceType", "Type"], base.priceType, 1, true);
-          base.priceValue = parseNumericCell(["Price", "PriceValue"], base.priceValue, 0, false);
-          base.prevPriceValue = parseNumericCell(["PrevPrice", "PreviousPrice"], base.prevPriceValue, 0, false);
-          base.dealQty = parseNumericCell(["DealQty", "Quantity"], base.dealQty, 0, true);
-          base.dealPrice = parseNumericCell(["DealPrice"], base.dealPrice, 0, false);
-          base.showUnit = parseNumericCell(["ShowUnit"], base.showUnit, 0, true);
-          base.showDealUnit = parseNumericCell(["ShowDealUnit"], base.showDealUnit, 0, true);
-          base.useDefaultBG = parseNumericCell(["UseDefaultBG", "UseDefaultBg"], base.useDefaultBG, 1, true);
-          base.productIndex = parseNumericCell(["ProductIndex"], base.productIndex, idx, true);
-          base.bgSideManual = parseNumericCell(["BGSideManual", "BgSideManual"], base.bgSideManual, 1, true);
-          base.bgColorManual = parseNumericCell(["BGColorManual", "BgColorManual"], base.bgColorManual, 1, true);
-          base.useAutoWhite = parseNumericCell(["UseAutoWhite"], base.useAutoWhite, 1, true);
-          base.whiteWidth = parseNumericCell(["WhiteWidth"], base.whiteWidth, 2, true);
-          base.showPrevPrice = parseNumericCell(["ShowPrevPrice"], base.showPrevPrice, 0, true);
-          base.prevXOffset = parseNumericCell(["PrevXOffset", "PrevX", "PrevXOffset\n"], base.prevXOffset, 0, false);
-          base.themeOverride = parseNumericCell(["ThemeOverride"], base.themeOverride, 1, true);
-          base.priceBgSelection = parseNumericCell(["PriceBGSelection", "PriceBgSelection"], base.priceBgSelection, 1, true);
-          base.priceDirectionOverride = parseNumericCell(["PriceDirectionOverride"], base.priceDirectionOverride, 1, true);
-          base.regDecimalOffset = parseNumericCell(["RegDecimalOffset"], base.regDecimalOffset, 0, false);
-          base.regCurrencyOffset = parseNumericCell(["RegCurrencyOffset"], base.regCurrencyOffset, 0, false);
-          base.regUnitOffset = parseNumericCell(["RegUnitOffset"], base.regUnitOffset, 0, false);
-          base.prevDecimalOffset = parseNumericCell(["PrevDecimalOffset"], base.prevDecimalOffset, 0, false);
-          base.prevCurrencyOffset = parseNumericCell(["PrevCurrencyOffset"], base.prevCurrencyOffset, 0, false);
-          base.prevUnitOffset = parseNumericCell(["PrevUnitOffset"], base.prevUnitOffset, 0, false);
-          base.dealQtyGap = parseNumericCell(["DealQtyGap"], base.dealQtyGap, 0, false);
-          base.dealSepGap = parseNumericCell(["DealSepGap"], base.dealSepGap, 0, false);
-          base.dealCurGap = parseNumericCell(["DealCurGap"], base.dealCurGap, 0, false);
-          
+
+          base.priceType = parseNumericCell(["PriceType", "Type"], 4, base.priceType, 1, true);
+          base.priceValue = parseNumericCell(["Price", "PriceValue"], 5, base.priceValue, 0, false);
+          base.prevPriceValue = parseNumericCell(["PrevPrice", "PreviousPrice"], 6, base.prevPriceValue, 0, false);
+          base.dealQty = parseNumericCell(["DealQty", "Quantity"], 7, base.dealQty, 0, true);
+          base.dealPrice = parseNumericCell(["DealPrice"], 8, base.dealPrice, 0, false);
+          base.showUnit = parseNumericCell(["ShowUnit"], 9, base.showUnit, 0, true);
+          base.showDealUnit = parseNumericCell(["ShowDealUnit", "ShowDeal"], 10, base.showDealUnit, 0, true);
+          base.useDefaultBG = parseNumericCell(["UseDefaultBG", "UseDefaultBg", "UseDefaul"], 11, base.useDefaultBG, 1, true);
+          base.productIndex = parseNumericCell(["ProductIndex", "ProductInd"], 12, base.productIndex, idx, true);
+          base.bgSideManual = parseNumericCell(["BGSideManual", "BgSideManual", "BGSideMa"], 13, base.bgSideManual, 1, true);
+          base.bgColorManual = parseNumericCell(["BGColorManual", "BgColorManual", "BGColorM"], 14, base.bgColorManual, 1, true);
+          base.useAutoWhite = parseNumericCell(["UseAutoWhite", "UseAutoW"], 15, base.useAutoWhite, 1, true);
+          base.whiteWidth = parseNumericCell(["WhiteWidth", "WhiteWidt"], 16, base.whiteWidth, 2, true);
+          base.showPrevPrice = parseNumericCell(["ShowPrevPrice", "ShowPrev"], 17, base.showPrevPrice, 0, true);
+          base.prevXOffset = parseNumericCell(["PrevXOffset", "PrevX", "PrevXOffset\n", "PrevXOffs"], 18, base.prevXOffset, 0, false);
+          base.themeOverride = parseNumericCell(["ThemeOverride", "ThemeOv"], 19, base.themeOverride, 1, true);
+          base.priceBgSelection = parseNumericCell(["PriceBGSelection", "PriceBgSelection", "PriceBGSel"], 20, base.priceBgSelection, 1, true);
+          base.priceDirectionOverride = parseNumericCell(["PriceDirectionOverride", "PriceDirection", "PriceDir"], 21, base.priceDirectionOverride, 1, true);
+          base.regDecimalOffset = parseNumericCell(["RegDecimalOffset"], 22, base.regDecimalOffset, 0, false);
+          base.regCurrencyOffset = parseNumericCell(["RegCurrencyOffset"], 23, base.regCurrencyOffset, 0, false);
+          base.regUnitOffset = parseNumericCell(["RegUnitOffset"], 24, base.regUnitOffset, 0, false);
+          base.prevDecimalOffset = parseNumericCell(["PrevDecimalOffset"], 25, base.prevDecimalOffset, 0, false);
+          base.prevCurrencyOffset = parseNumericCell(["PrevCurrencyOffset"], 26, base.prevCurrencyOffset, 0, false);
+          base.prevUnitOffset = parseNumericCell(["PrevUnitOffset"], 27, base.prevUnitOffset, 0, false);
+          base.dealQtyGap = parseNumericCell(["DealQtyGap"], 28, base.dealQtyGap, 0, false);
+          base.dealSepGap = parseNumericCell(["DealSepGap"], 29, base.dealSepGap, 0, false);
+          base.dealCurGap = parseNumericCell(["DealCurGap"], 30, base.dealCurGap, 0, false);
+
           try { base.warnOverflow = calcOverflowWarn(base.mainText); } catch(_){}
-          
+
           report.products++;
         }
       }
@@ -1623,37 +1629,8 @@ function importCompleteProjectFromCSV(){
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // Import RENDER
+    // Import RENDER (disabled by request)
     // ═══════════════════════════════════════════════════════════════
-    if (sections.RENDER){
-      var renderLines = sections.RENDER;
-      var renderData = {};
-      
-      for (var rl = 1; rl < renderLines.length; rl++){
-        var renderCells = renderLines[rl];
-        if (renderCells.length >= 2){
-          var rProp = trimString(renderCells[0]);
-          var rVal = trimString(renderCells[1]);
-          
-          if (rProp === "ProductCount") renderData.productCount = parseInt(rVal, 10) || 0;
-          else if (rProp === "SaleCount") renderData.saleCount = parseInt(rVal, 10) || 0;
-          else if (rProp === "RenderSale") renderData.renderSale = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderEntrance") renderData.renderEntrance = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderPardes") renderData.renderPardes = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderOutside") renderData.renderOutside = (parseInt(rVal, 10) === 1);
-          else if (rProp === "RenderDrinks") renderData.renderDrinks = (parseInt(rVal, 10) === 1);
-          else if (rProp === "OutputFolder") renderData.outputFolder = rVal;
-          else if (rProp === "FileNameBase") renderData.fileNameBase = rVal;
-          else if (rProp === "OutputModule") renderData.outputModule = rVal;
-        }
-      }
-      
-      if (!state.renderConfig) state.renderConfig = {};
-      for (var key in renderData) {
-        if (renderData.hasOwnProperty(key)) state.renderConfig[key] = renderData[key];
-      }
-      report.renderImported = true;
-    }
     
   }catch(e){
     report.errors.push(e.toString());
@@ -1697,7 +1674,7 @@ function importCompleteProjectFromCSV(){
         "Styling: " + (report.styling ? "✅" : "—") + "\n" +
         "Talach: " + (report.talach ? "✅" : "—") + "\n" +
         "Colors: " + report.colors + "\n" +
-        "Render: " + (report.renderImported ? "✅" : "—") + "\n\n" +
+        "Render: — (disabled)" + "\n\n" +
         (report.errors.length ? ("⚠️ Errors:\n" + report.errors.join("\n")) : "No errors"));
 }
 
