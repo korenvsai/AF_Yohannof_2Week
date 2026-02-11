@@ -951,6 +951,7 @@ function csvEscapeField(field) {
 function detectCSVDelimiter(text){
   var commaCount = 0;
   var semiCount = 0;
+  var tabCount = 0;
   var inQuotes = false;
   var lineNum = 0;
 
@@ -973,11 +974,14 @@ function detectCSVDelimiter(text){
       commaCount++;
     } else if (ch === ';'){
       semiCount++;
+    } else if (ch === '\t'){
+      tabCount++;
     } else if (ch === '\n'){
       lineNum++;
     }
   }
 
+  if (tabCount > commaCount && tabCount > semiCount) return '\t';
   return (semiCount > commaCount) ? ';' : ',';
 }
 
