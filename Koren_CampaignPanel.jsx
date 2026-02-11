@@ -948,7 +948,41 @@ function csvEscapeField(field) {
   return s;
 }
 
+function detectCSVDelimiter(text){
+  var commaCount = 0;
+  var semiCount = 0;
+  var inQuotes = false;
+  var lineNum = 0;
+
+  for (var i = 0; i < text.length && lineNum < 40; i++){
+    var ch = text.charAt(i);
+    if (inQuotes){
+      if (ch === '"'){
+        if (i + 1 < text.length && text.charAt(i + 1) === '"'){
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      }
+      continue;
+    }
+
+    if (ch === '"'){
+      inQuotes = true;
+    } else if (ch === ','){
+      commaCount++;
+    } else if (ch === ';'){
+      semiCount++;
+    } else if (ch === '\n'){
+      lineNum++;
+    }
+  }
+
+  return (semiCount > commaCount) ? ';' : ',';
+}
+
 function parseCSVContent(text){
+  var delimiter = detectCSVDelimiter(text);
   var rows = [];
   var row = [];
   var field = "";
@@ -971,7 +1005,7 @@ function parseCSVContent(text){
     } else {
       if (ch === '"'){
         inQuotes = true;
-      } else if (ch === ','){
+      } else if (ch === delimiter){
         row.push(field);
         field = "";
       } else if (ch === '\n'){
